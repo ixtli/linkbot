@@ -17,6 +17,20 @@ from twisted.words.protocols import irc
 from twisted.internet import reactor, protocol
 from twisted.python import log
 
+# sqlite imports
+from sqlite3 import *
+
+# User Types
+ROOT        = 0
+ADMIN       = 1
+MODERATOR   = 2
+SUPER_USER  = 3
+USER        = 4
+RESTRICTED  = 5
+
+
+
+
 class MessageLogger:
     """
     Logger class for recording interaction with the bot
@@ -40,11 +54,81 @@ class MessageLogger:
         self.close()
 
 
+class DBManager:
+    """
+    Handles writing to a small database to keep track of registered users
+    and the like
+    """
+
+    users_db_name = os.path.join(os.getcwd(), 'users_db')
+    users_connn = None
+    users_curs = None
+    logger = None
+
+    def __init__(self, lo):
+        if lo == None:
+            return
+        self.logger = lo
+        if os.path.exists(self.users_db_name) == False:
+            # We need to init the DB
+            self.initUsers()
+        else:
+            self.users_conn = connect(self.users_db_name)
+            self.logger.log("[Connected to Users DB.]")
+
+    def createUser(self, name, user_type):
+        """Create a user in the users_db"""
+        cur = self.users_conn.cursor()
+        cur.execute("INSERT INTO Users values(NULL, \'" +
+                                name + "\', datetime('now'), " + str(user_type) +
+                                ")")
+        self.users_conn.commit()
+        self.logger.log("[Added type %s user '%s']" % (str(user_type), name) )
+        cur.close()
+
+    def getUser(name):
+        """
+        Gets a user's account data, returning the ID, Name, CTime, and Class
+        """
+        cur = self.users_conn.cursor()
+        cur.execute("SELECT * FROM Users WHERE name=\'" +
+                                name + "\'")
+        r = cur.fetchone()
+        cur.close()
+        return r
+
+    def initUsers(self):
+        """Initialize the Users db.
+
+        This means creating the file and the tables, etc...
+        """
+
+        self.users_conn = connect(self.users_db_name)
+        cur = self.users_conn.cursor()
+        cur.execute('''CREATE TABLE Users(
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(255) UNIQUE,
+            created DATETIME,
+            class TINYINT);
+            ''')
+        self.users_conn.commit()
+        cur.close()
+        self.createUser("ixtli", ROOT)
+        self.createUser("ag", ADMIN)
+        self.createUser("oobity", MODERATOR)
+        self.logger.log("[Initialized Users DB.]")
+
+    def __del__(self):
+        self.users_conn.close()
+        self.logger.log("[Connection to Users DB closed.]")
+
+
 class LinkBot(irc.IRCClient):
     """A bot for logging links to a file with metadata."""
 
     nickname = "linkbot"
     logger = None
+    dbm = None
 
     def connectionMade(self):
         irc.IRCClient.connectionMade(self)
@@ -56,11 +140,13 @@ class LinkBot(irc.IRCClient):
         self.logger = MessageLogger(f)
         self.logger.log("[connected as %s]" %
                         time.asctime(time.localtime(time.time())))
+        self.dbm = DBManager(self.logger)
 
     def connectionLost(self, reason):
         irc.IRCClient.connectionLost(self, reason)
         self.logger.log("[disconnected at %s]" %
                         time.asctime(time.localtime(time.time())))
+        del self.dbm
         del self.logger
 
     # event callbacks
